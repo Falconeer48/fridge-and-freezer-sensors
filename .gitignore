@@ -1,0 +1,26 @@
+# Arduino build files
+*.hex
+*.elf
+*.bin
+build/
+*.cache
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files (keep main sketch, ignore test sketches in subdirectories)
+resistor_test/
+sensor_test/
+
+# Keep test files but ignore compiled outputs
+*.o
+*.a
+
