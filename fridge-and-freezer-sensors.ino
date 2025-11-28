@@ -68,7 +68,7 @@ const char* topic_external = "home/kitchen/external/temperature";
 const char* topic_availability = "home/kitchen/sensors/availability";
 
 unsigned long lastRead = 0;
-const unsigned long interval = 5000;  // 5 seconds for testing (normally 60000)
+const unsigned long interval = 60000;  // 1 minute - MQTT publish interval
 bool otaInProgress = false;
 
 // Temperature variables
@@ -80,9 +80,9 @@ bool fridgeOk   = false;
 bool freezerOk  = false;
 bool externalOk = false;
 
-// Graph data storage - 3 hours at 5 minute intervals (36 readings)
-const int MAX_READINGS = 36;  // 3 hours * 60 minutes / 5 = 36
-const unsigned long GRAPH_INTERVAL = 300000;  // 5 minutes in milliseconds
+// Graph data storage - 3 hours at 3 minute intervals (60 readings)
+const int MAX_READINGS = 60;  // 3 hours * 60 minutes / 3 = 60
+const unsigned long GRAPH_INTERVAL = 180000;  // 3 minutes in milliseconds
 
 struct TempReading {
   unsigned long timestamp;   // epoch seconds
