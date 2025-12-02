@@ -7,6 +7,11 @@
 #include <ArduinoOTA.h>
 #include <time.h>   // For real-time clock via NTP
 
+// Sketch version information
+const char* SKETCH_NAME = "fridge-and-freezer-sensors";
+const char* SKETCH_FOLDER = "/Users/ian/Documents/Arduino/fridge-and-freezer-sensors";
+const char* SKETCH_VERSION = "1.0.0";
+
 const char* ssid     = "Falconeer48_EXT";
 const char* password = "0795418296";
 
@@ -32,17 +37,17 @@ DallasTemperature sensors(&oneWire);
 #define BUZZER_PIN 4
 
 // Temperature alert thresholds
-const float FRIDGE_MAX_TEMP = 8.0;      // Fridge too warm (°C)
-const float FRIDGE_MIN_TEMP = 0.0;      // Fridge too cold (°C)
+const float EXTERNAL_MAX_TEMP = 8.0;    // External too warm (°C)
+const float EXTERNAL_MIN_TEMP = 0.0;    // External too cold (°C)
 const float FREEZER_MAX_TEMP = -12.0;   // Freezer too warm (°C)
 const float FREEZER_MIN_TEMP = -25.0;   // Freezer too cold (°C)
-const float EXTERNAL_MAX_TEMP = 8.0;    // External fridge too warm (°C)
-const float EXTERNAL_MIN_TEMP = 0.0;    // External fridge too cold (°C)
+const float FRIDGE_MAX_TEMP = 8.0;      // Fridge too warm (°C)
+const float FRIDGE_MIN_TEMP = 0.0;      // Fridge too cold (°C)
 
 // Alert state tracking
-bool fridgeAlert = false;
-bool freezerAlert = false;
 bool externalAlert = false;
+bool freezerAlert = false;
+bool fridgeAlert = false;
 bool sensorFailureAlert = false;
 unsigned long lastBuzzerBeep = 0;
 unsigned long buzzerBeepStart = 0;
@@ -54,17 +59,17 @@ const int BUZZER_DUTY = 230;  // 90% duty cycle (255 = 100%, 230 = 90%) - very l
 bool buzzerPWMAttached = false;
 
 // Final sensor mapping after swap:
-// Fridge stays the same
+// External stays the same
 // Freezer now uses old External address
-// External now uses old Freezer address
-DeviceAddress fridgeSensor   = { 0x28, 0x4F, 0x2E, 0xAF, 0x0F, 0x00, 0x00, 0x79 };
+// Fridge now uses old Freezer address
+DeviceAddress externalSensor = { 0x28, 0x4F, 0x2E, 0xAF, 0x0F, 0x00, 0x00, 0x79 };
 DeviceAddress freezerSensor  = { 0x28, 0x89, 0x89, 0x87, 0x00, 0x3C, 0x05, 0x5A };
-DeviceAddress externalSensor = { 0x28, 0x7D, 0xB0, 0xB0, 0x0F, 0x00, 0x00, 0x4D };
+DeviceAddress fridgeSensor   = { 0x28, 0x7D, 0xB0, 0xB0, 0x0F, 0x00, 0x00, 0x4D };
 
 // MQTT topic paths
-const char* topic_fridge   = "home/kitchen/fridge/temperature";
+const char* topic_external = "home/kitchen/fridge/temperature";
 const char* topic_freezer  = "home/kitchen/freezer/temperature";
-const char* topic_external = "home/kitchen/external/temperature";
+const char* topic_fridge   = "home/kitchen/external/temperature";
 const char* topic_availability = "home/kitchen/sensors/availability";
 
 unsigned long lastRead = 0;
@@ -72,13 +77,13 @@ const unsigned long interval = 60000;  // 1 minute - MQTT publish interval
 bool otaInProgress = false;
 
 // Temperature variables
-float tFridge   = -127;
-float tFreezer  = -127;
 float tExternal = -127;
+float tFreezer  = -127;
+float tFridge   = -127;
 
-bool fridgeOk   = false;
-bool freezerOk  = false;
 bool externalOk = false;
+bool freezerOk  = false;
+bool fridgeOk   = false;
 
 // Graph data storage - 3 hours at 3 minute intervals (60 readings)
 const int MAX_READINGS = 60;  // 3 hours * 60 minutes / 3 = 60
@@ -86,9 +91,9 @@ const unsigned long GRAPH_INTERVAL = 180000;  // 3 minutes in milliseconds
 
 struct TempReading {
   unsigned long timestamp;   // epoch seconds
-  float tFridge;
-  float tFreezer;
   float tExternal;
+  float tFreezer;
+  float tFridge;
 };
 
 TempReading readings[MAX_READINGS];
@@ -184,16 +189,16 @@ void updateBuzzer() {
 void checkAlerts() {
   bool anyAlert = false;
   
-  // Check fridge - only alert if sensor is OK but temperature is out of range
-  if (fridgeOk) {
-    if (tFridge > FRIDGE_MAX_TEMP || tFridge < FRIDGE_MIN_TEMP) {
-      fridgeAlert = true;
+  // Check external - only alert if sensor is OK but temperature is out of range
+  if (externalOk) {
+    if (tExternal > EXTERNAL_MAX_TEMP || tExternal < EXTERNAL_MIN_TEMP) {
+      externalAlert = true;
       anyAlert = true;
     } else {
-      fridgeAlert = false;
+      externalAlert = false;
     }
   } else {
-    fridgeAlert = false;  // Sensor failure - don't trigger buzzer
+    externalAlert = false;  // Sensor failure - don't trigger buzzer
   }
   
   // Check freezer - only alert if sensor is OK but temperature is out of range
@@ -208,16 +213,16 @@ void checkAlerts() {
     freezerAlert = false;  // Sensor failure - don't trigger buzzer
   }
   
-  // Check external fridge - only alert if sensor is OK but temperature is out of range
-  if (externalOk) {
-    if (tExternal > EXTERNAL_MAX_TEMP || tExternal < EXTERNAL_MIN_TEMP) {
-      externalAlert = true;
+  // Check fridge - only alert if sensor is OK but temperature is out of range
+  if (fridgeOk) {
+    if (tFridge > FRIDGE_MAX_TEMP || tFridge < FRIDGE_MIN_TEMP) {
+      fridgeAlert = true;
       anyAlert = true;
     } else {
-      externalAlert = false;
+      fridgeAlert = false;
     }
   } else {
-    externalAlert = false;  // Sensor failure - don't trigger buzzer
+    fridgeAlert = false;  // Sensor failure - don't trigger buzzer
   }
   
   // Check for sensor failures (for display purposes only, not for buzzer)
@@ -268,18 +273,18 @@ void scanSensors() {
       Serial.print("): ");
       printAddress(tempDeviceAddress);
       
-      bool isFridge   = true;
-      bool isFreezer  = true;
       bool isExternal = true;
+      bool isFreezer  = true;
+      bool isFridge   = true;
       for (int j = 0; j < 8; j++) {
-        if (tempDeviceAddress[j] != fridgeSensor[j])   isFridge   = false;
-        if (tempDeviceAddress[j] != freezerSensor[j])  isFreezer  = false;
         if (tempDeviceAddress[j] != externalSensor[j]) isExternal = false;
+        if (tempDeviceAddress[j] != freezerSensor[j])  isFreezer  = false;
+        if (tempDeviceAddress[j] != fridgeSensor[j])   isFridge   = false;
       }
       
-      if (isFridge) Serial.print(" <-- FRIDGE");
+      if (isExternal) Serial.print(" <-- EXTERNAL");
       else if (isFreezer) Serial.print(" <-- FREEZER");
-      else if (isExternal) Serial.print(" <-- EXTERNAL");
+      else if (isFridge) Serial.print(" <-- FRIDGE");
       else Serial.print(" <-- UNKNOWN SENSOR");
       
       Serial.println();
@@ -287,24 +292,24 @@ void scanSensors() {
   }
   
   Serial.println("\nExpected sensor addresses:");
-  Serial.print("  Fridge:    ");
-  printAddress(fridgeSensor);
+  Serial.print("  External:  ");
+  printAddress(externalSensor);
   Serial.println();
   Serial.print("  Freezer:   ");
   printAddress(freezerSensor);
   Serial.println();
-  Serial.print("  External:  ");
-  printAddress(externalSensor);
+  Serial.print("  Fridge:    ");
+  printAddress(fridgeSensor);
   Serial.println();
   
   Serial.println("\nCurrent sensor readings:");
-  Serial.print("  Fridge:    ");
-  if (fridgeOk) {
-    Serial.print(tFridge, 2);
+  Serial.print("  External:  ");
+  if (externalOk) {
+    Serial.print(tExternal, 2);
     Serial.println(" °C");
   } else {
     Serial.print("FAILED (value: ");
-    Serial.print(tFridge, 2);
+    Serial.print(tExternal, 2);
     Serial.println(")");
   }
   
@@ -318,13 +323,13 @@ void scanSensors() {
     Serial.println(")");
   }
   
-  Serial.print("  External:  ");
-  if (externalOk) {
-    Serial.print(tExternal, 2);
+  Serial.print("  Fridge:    ");
+  if (fridgeOk) {
+    Serial.print(tFridge, 2);
     Serial.println(" °C");
   } else {
     Serial.print("FAILED (value: ");
-    Serial.print(tExternal, 2);
+    Serial.print(tFridge, 2);
     Serial.println(")");
   }
   Serial.println("========================");
@@ -386,29 +391,29 @@ void setup() {
   
   delay(1000);
   sensors.requestTemperatures();
-  tFridge   = sensors.getTempC(fridgeSensor);
-  tFreezer  = sensors.getTempC(freezerSensor);
   tExternal = sensors.getTempC(externalSensor);
+  tFreezer  = sensors.getTempC(freezerSensor);
+  tFridge   = sensors.getTempC(fridgeSensor);
   
-  fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
-  freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
   externalOk = (tExternal != DEVICE_DISCONNECTED_C && tExternal > -100);
+  freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
+  fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
   
   // Run sensor diagnostics
   scanSensors();
   
   for (int i = 0; i < MAX_READINGS; i++) {
     readings[i].timestamp = 0;
-    readings[i].tFridge   = -127;
-    readings[i].tFreezer  = -127;
     readings[i].tExternal = -127;
+    readings[i].tFreezer  = -127;
+    readings[i].tFridge   = -127;
   }
   
   unsigned long nowEpoch = currentEpoch();
   readings[readingIndex].timestamp = nowEpoch;
-  readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
-  readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
   readings[readingIndex].tExternal = externalOk ? tExternal : -127;
+  readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
+  readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
   
   readingIndex = (readingIndex + 1) % MAX_READINGS;
   readingCount = 1;
@@ -432,9 +437,9 @@ void setup() {
         first = false;
         json += "{";
         json += "\"t\":"         + String(readings[idx].timestamp) + ",";
-        json += "\"tFridge\":"   + String(readings[idx].tFridge, 1) + ",";
+        json += "\"tExternal\":" + String(readings[idx].tExternal, 1) + ",";
         json += "\"tFreezer\":"  + String(readings[idx].tFreezer, 1) + ",";
-        json += "\"tExternal\":" + String(readings[idx].tExternal, 1);
+        json += "\"tFridge\":"   + String(readings[idx].tFridge, 1);
         json += "}";
       }
     }
@@ -446,12 +451,12 @@ void setup() {
   server.on("/status", []() {
     int rssi = WiFi.RSSI();
     String json = "{";
-    json += "\"tFridge\":"    + String(tFridge, 1)   + ",";
-    json += "\"tFreezer\":"   + String(tFreezer, 1)  + ",";
     json += "\"tExternal\":"  + String(tExternal, 1) + ",";
-    json += "\"okFridge\":"   + String(fridgeOk   ? "true" : "false") + ",";
-    json += "\"okFreezer\":"  + String(freezerOk  ? "true" : "false") + ",";
+    json += "\"tFreezer\":"   + String(tFreezer, 1)  + ",";
+    json += "\"tFridge\":"    + String(tFridge, 1)   + ",";
     json += "\"okExternal\":" + String(externalOk ? "true" : "false") + ",";
+    json += "\"okFreezer\":"  + String(freezerOk  ? "true" : "false") + ",";
+    json += "\"okFridge\":"   + String(fridgeOk   ? "true" : "false") + ",";
     json += "\"rssi\":"       + String(rssi) + ",";
     json += "\"mqtt\":"       + String(client.connected() ? "true" : "false") + ",";
     json += "\"ota\":"        + String(otaInProgress ? "true" : "false");
@@ -508,18 +513,18 @@ void setup() {
     page += "<p class='subtitle'>Real-time Temperature Monitoring</p>";
     page += "<div class='sensor-grid'>";
     
-    // Fridge Card
+    // External Card
     page += "<div class='sensor-card'>";
     page += "<div class='sensor-title'>";
-    page += "<span id='statusFridgeIndicator' class='status-indicator " + String(fridgeOk ? "status-ok" : "status-error") + "'></span>";
-    page += "Fridge";
+    page += "<span id='statusExternalIndicator' class='status-indicator " + String(externalOk ? "status-ok" : "status-error") + "'></span>";
+    page += "External";
     page += "</div>";
-    if (fridgeOk) {
-      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>" + String(tFridge, 1) + "</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusFridgeText' class='status-text status-text-ok'>Sensor Active</div>";
+    if (externalOk) {
+      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>" + String(tExternal, 1) + "</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusExternalText' class='status-text status-text-ok'>Sensor Active</div>";
     } else {
-      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>—</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusFridgeText' class='status-text status-text-error'>Sensor Not Detected</div>";
+      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>—</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusExternalText' class='status-text status-text-error'>Sensor Not Detected</div>";
     }
     page += "</div>";
     
@@ -538,18 +543,18 @@ void setup() {
     }
     page += "</div>";
     
-    // External Card
+    // Fridge Card
     page += "<div class='sensor-card'>";
     page += "<div class='sensor-title'>";
-    page += "<span id='statusExternalIndicator' class='status-indicator " + String(externalOk ? "status-ok" : "status-error") + "'></span>";
-    page += "External";
+    page += "<span id='statusFridgeIndicator' class='status-indicator " + String(fridgeOk ? "status-ok" : "status-error") + "'></span>";
+    page += "Fridge";
     page += "</div>";
-    if (externalOk) {
-      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>" + String(tExternal, 1) + "</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusExternalText' class='status-text status-text-ok'>Sensor Active</div>";
+    if (fridgeOk) {
+      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>" + String(tFridge, 1) + "</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusFridgeText' class='status-text status-text-ok'>Sensor Active</div>";
     } else {
-      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>—</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusExternalText' class='status-text status-text-error'>Sensor Not Detected</div>";
+      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>—</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusFridgeText' class='status-text status-text-error'>Sensor Not Detected</div>";
     }
     page += "</div>";
     
@@ -579,6 +584,9 @@ void setup() {
     page += "<div class='info-row'><span class='info-label'>MQTT Status</span><span class='info-value'><span id='mqttStatusBadge' class='badge " + String(client.connected() ? "badge-connected" : "badge-disconnected") + "'>" + String(client.connected() ? "Connected" : "Disconnected") + "</span></span></div>";
     page += "<div class='info-row'><span class='info-label'>OTA Status</span><span class='info-value'><span id='otaStatusBadge' class='badge " + String(otaInProgress ? "badge-updating" : "badge-ready") + "'>" + String(otaInProgress ? "Update in Progress" : "Ready") + "</span></span></div>";
     page += "<div class='info-row'><span class='info-label'>Last Refresh</span><span class='info-value' id='lastRefreshTime'>—</span></div>";
+    page += "<div class='info-row'><span class='info-label'>Sketch Name</span><span class='info-value'>" + String(SKETCH_NAME) + "</span></div>";
+    page += "<div class='info-row'><span class='info-label'>Sketch Folder</span><span class='info-value'>" + String(SKETCH_FOLDER) + "</span></div>";
+    page += "<div class='info-row'><span class='info-label'>Version</span><span class='info-value'>" + String(SKETCH_VERSION) + "</span></div>";
     page += "</div>"; // info-section
     
     // Chart Section
@@ -615,9 +623,9 @@ void setup() {
     page += "  chart = new Chart(ctx, {";
     page += "    type: 'line',";
     page += "    data: { labels: [], datasets: [";
-    page += "      { label: 'Fridge', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4, fill: true },";
-    page += "      { label: 'Freezer', data: [], borderColor: '#f093fb', backgroundColor: 'rgba(240, 147, 251, 0.1)', tension: 0.4, fill: true },";
-    page += "      { label: 'External', data: [], borderColor: '#4facfe', backgroundColor: 'rgba(79, 172, 254, 0.1)', tension: 0.4, fill: true }";
+    page += "      { label: 'External', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4, fill: true, pointRadius: 0, pointHoverRadius: 0 },";
+    page += "      { label: 'Freezer', data: [], borderColor: '#f093fb', backgroundColor: 'rgba(240, 147, 251, 0.1)', tension: 0.4, fill: true, pointRadius: 0, pointHoverRadius: 0 },";
+    page += "      { label: 'Fridge', data: [], borderColor: '#4facfe', backgroundColor: 'rgba(79, 172, 254, 0.1)', tension: 0.4, fill: true, pointRadius: 0, pointHoverRadius: 0 }";
     page += "    ] },";
     page += "    options: {";
     page += "      responsive: true,";
@@ -641,48 +649,48 @@ void setup() {
     page += "function loadData() {";
     page += "  if (!chart) return;";
     page += "  fetch('/data').then(r => r.json()).then(result => {";
-    page += "    const labels = []; const fridgeData = []; const freezerData = []; const externalData = [];";
+    page += "    const labels = []; const externalData = []; const freezerData = []; const fridgeData = [];";
     page += "    if (result.data && result.data.length > 0) {";
     page += "      result.data.forEach(item => {";
     page += "        const date = new Date(item.t * 1000);";  // epoch seconds → ms
     page += "        const label = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });";
-    page += "        const fridgeValid = item.tFridge > -100 && item.tFridge < 100;";
-    page += "        const freezerValid = item.tFreezer > -100 && item.tFreezer < 100;";
     page += "        const externalValid = item.tExternal > -100 && item.tExternal < 100;";
-    page += "        if (fridgeValid || freezerValid || externalValid) {";
+    page += "        const freezerValid = item.tFreezer > -100 && item.tFreezer < 100;";
+    page += "        const fridgeValid = item.tFridge > -100 && item.tFridge < 100;";
+    page += "        if (externalValid || freezerValid || fridgeValid) {";
     page += "          labels.push(label);";
-    page += "          fridgeData.push(fridgeValid ? parseFloat(item.tFridge) : NaN);";
-    page += "          freezerData.push(freezerValid ? parseFloat(item.tFreezer) : NaN);";
     page += "          externalData.push(externalValid ? parseFloat(item.tExternal) : NaN);";
+    page += "          freezerData.push(freezerValid ? parseFloat(item.tFreezer) : NaN);";
+    page += "          fridgeData.push(fridgeValid ? parseFloat(item.tFridge) : NaN);";
     page += "        }";
     page += "      });";
     page += "    }";
     page += "    chart.data.labels = labels;";
-    page += "    chart.data.datasets[0].data = fridgeData;";
+    page += "    chart.data.datasets[0].data = externalData;";
     page += "    chart.data.datasets[1].data = freezerData;";
-    page += "    chart.data.datasets[2].data = externalData;";
+    page += "    chart.data.datasets[2].data = fridgeData;";
     page += "    chart.update();";
     page += "  }).catch(err => console.error('Error loading data:', err));";
     page += "}";
     
     page += "function loadStatus() {";
     page += "  fetch('/status').then(r => r.json()).then(data => {";
-    page += "    updateTextWithFade('tempFridge', data.tFridge.toFixed(1));";
-    page += "    updateTextWithFade('tempFreezer', data.tFreezer.toFixed(1));";
     page += "    updateTextWithFade('tempExternal', data.tExternal.toFixed(1));";
+    page += "    updateTextWithFade('tempFreezer', data.tFreezer.toFixed(1));";
+    page += "    updateTextWithFade('tempFridge', data.tFridge.toFixed(1));";
     
-    page += "    const fridgeOk = data.okFridge;";
-    page += "    const freezerOk = data.okFreezer;";
     page += "    const externalOk = data.okExternal;";
+    page += "    const freezerOk = data.okFreezer;";
+    page += "    const fridgeOk = data.okFridge;";
     
-    page += "    const indF = document.getElementById('statusFridgeIndicator');";
-    page += "    const txtF = document.getElementById('statusFridgeText');";
-    page += "    if (indF && txtF) {";
-    page += "      indF.classList.remove('status-ok','status-error');";
-    page += "      indF.classList.add(fridgeOk ? 'status-ok' : 'status-error');";
-    page += "      txtF.classList.remove('status-text-ok','status-text-error');";
-    page += "      txtF.classList.add(fridgeOk ? 'status-text-ok' : 'status-text-error');";
-    page += "      txtF.textContent = fridgeOk ? 'Sensor Active' : 'Sensor Not Detected';";
+    page += "    const indX = document.getElementById('statusExternalIndicator');";
+    page += "    const txtX = document.getElementById('statusExternalText');";
+    page += "    if (indX && txtX) {";
+    page += "      indX.classList.remove('status-ok','status-error');";
+    page += "      indX.classList.add(externalOk ? 'status-ok' : 'status-error');";
+    page += "      txtX.classList.remove('status-text-ok','status-text-error');";
+    page += "      txtX.classList.add(externalOk ? 'status-text-ok' : 'status-text-error');";
+    page += "      txtX.textContent = externalOk ? 'Sensor Active' : 'Sensor Not Detected';";
     page += "    }";
     
     page += "    const indZ = document.getElementById('statusFreezerIndicator');";
@@ -695,14 +703,14 @@ void setup() {
     page += "      txtZ.textContent = freezerOk ? 'Sensor Active' : 'Sensor Not Detected';";
     page += "    }";
     
-    page += "    const indX = document.getElementById('statusExternalIndicator');";
-    page += "    const txtX = document.getElementById('statusExternalText');";
-    page += "    if (indX && txtX) {";
-    page += "      indX.classList.remove('status-ok','status-error');";
-    page += "      indX.classList.add(externalOk ? 'status-ok' : 'status-error');";
-    page += "      txtX.classList.remove('status-text-ok','status-text-error');";
-    page += "      txtX.classList.add(externalOk ? 'status-text-ok' : 'status-text-error');";
-    page += "      txtX.textContent = externalOk ? 'Sensor Active' : 'Sensor Not Detected';";
+    page += "    const indF = document.getElementById('statusFridgeIndicator');";
+    page += "    const txtF = document.getElementById('statusFridgeText');";
+    page += "    if (indF && txtF) {";
+    page += "      indF.classList.remove('status-ok','status-error');";
+    page += "      indF.classList.add(fridgeOk ? 'status-ok' : 'status-error');";
+    page += "      txtF.classList.remove('status-text-ok','status-text-error');";
+    page += "      txtF.classList.add(fridgeOk ? 'status-text-ok' : 'status-text-error');";
+    page += "      txtF.textContent = fridgeOk ? 'Sensor Active' : 'Sensor Not Detected';";
     page += "    }";
     
     page += "    const wifiBadge = document.getElementById('wifiSignalBadge');";
@@ -778,30 +786,30 @@ void loop() {
     lastRead = now;
 
     sensors.requestTemperatures();
-    tFridge   = sensors.getTempC(fridgeSensor);
-    tFreezer  = sensors.getTempC(freezerSensor);
     tExternal = sensors.getTempC(externalSensor);
+    tFreezer  = sensors.getTempC(freezerSensor);
+    tFridge   = sensors.getTempC(fridgeSensor);
 
-    fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
-    freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
     externalOk = (tExternal != DEVICE_DISCONNECTED_C && tExternal > -100);
+    freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
+    fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
     
     // Check for alerts and control buzzer
     checkAlerts();
     
     scanSensors();
 
-    if (fridgeOk)   client.publish(topic_fridge,   String(tFridge).c_str(), true);
-    if (freezerOk)  client.publish(topic_freezer,  String(tFreezer).c_str(), true);
     if (externalOk) client.publish(topic_external, String(tExternal).c_str(), true);
+    if (freezerOk)  client.publish(topic_freezer,  String(tFreezer).c_str(), true);
+    if (fridgeOk)   client.publish(topic_fridge,   String(tFridge).c_str(), true);
     
     if (now - lastGraphSave >= GRAPH_INTERVAL) {
       lastGraphSave = now;
       unsigned long nowEpoch = currentEpoch();
       readings[readingIndex].timestamp = nowEpoch;
-      readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
-      readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
       readings[readingIndex].tExternal = externalOk ? tExternal : -127;
+      readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
+      readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
       
       readingIndex = (readingIndex + 1) % MAX_READINGS;
       if (readingCount < MAX_READINGS) readingCount++;
