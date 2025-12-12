@@ -10,7 +10,7 @@
 // Sketch version information
 const char* SKETCH_NAME    = "fridge-and-freezer-sensors";
 const char* SKETCH_FOLDER  = "/Users/ian/Documents/Arduino/fridge-and-freezer-sensors";
-const char* SKETCH_VERSION = "1.0.6";  // Verified MQTT server IP address
+const char* SKETCH_VERSION = "1.0.9";  // Swapped Fridge/External display labels
 
 // Serial output verbosity
 const bool SERIAL_VERBOSE = false;
@@ -35,11 +35,8 @@ WebServer server(80);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
-// Buzzer pin
-#define BUZZER_PIN 4
-
 // Thresholds
-const float EXTERNAL_MAX_TEMP = 8.0;
+const float EXTERNAL_MAX_TEMP = 35.0;
 const float EXTERNAL_MIN_TEMP = 0.0;
 const float FREEZER_MAX_TEMP  = -12.0;
 const float FREEZER_MIN_TEMP  = -25.0;
@@ -51,19 +48,14 @@ bool externalAlert      = false;
 bool freezerAlert       = false;
 bool fridgeAlert        = false;
 bool sensorFailureAlert = false;
-unsigned long lastBuzzerBeep   = 0;
-unsigned long buzzerBeepStart  = 0;
-bool buzzerActive              = false;
-const unsigned long BUZZER_INTERVAL       = 2000UL;
-const unsigned long BUZZER_BEEP_DURATION  = 300UL;
-const int BUZZER_FREQUENCY = 2000;
-const int BUZZER_DUTY      = 230;
-bool buzzerPWMAttached     = false;
 
-// Final sensor mapping
-DeviceAddress externalSensor = { 0x28, 0x7D, 0xB0, 0xB0, 0x0F, 0x00, 0x00, 0x4D };  // Old fridge address
+// Sensor mapping - MAC addresses to names
+// Sensor #1: 28:89:89:87:00:3C:05:5A → Freezer (Coldest, ~-24°C)
 DeviceAddress freezerSensor  = { 0x28, 0x89, 0x89, 0x87, 0x00, 0x3C, 0x05, 0x5A };
-DeviceAddress fridgeSensor   = { 0x28, 0x4F, 0x2E, 0xAF, 0x0F, 0x00, 0x00, 0x79 };  // Old external address
+// Sensor #2: 28:7D:B0:B0:0F:00:00:4D → External (Warmest, ~23°C)
+DeviceAddress externalSensor = { 0x28, 0x7D, 0xB0, 0xB0, 0x0F, 0x00, 0x00, 0x4D };
+// Sensor #3: 28:4F:2E:AF:0F:00:00:79 → Fridge (Middle, ~7°C)
+DeviceAddress fridgeSensor   = { 0x28, 0x4F, 0x2E, 0xAF, 0x0F, 0x00, 0x00, 0x79 };
 
 // MQTT topics
 const char* topic_external     = "home/kitchen/external/temperature";
@@ -221,7 +213,39 @@ void checkWiFiConnection() {
       Serial.print("RSSI: ");
       Serial.println(WiFi.RSSI());
 
-      if (now - lastWiFiReconnectAttempt >= WIFI_RECONNECT_INTERVAL) {
+      // Check if WiFi reconnected (non-blocking check)
+      if (WiFi.status() == WL_CONNECTED) {
+        // WiFi reconnected successfully
+        unsigned long reconnectDuration = (millis() - wifiLastDisconnectTime) / 1000;  // seconds
+        
+        // Update the most recent log entry with reconnection info
+        int lastLogIdx = (wifiLogIndex - 1 + MAX_WIFI_LOGS) % MAX_WIFI_LOGS;
+        if (wifiLogCount > 0) {
+          wifiLogs[lastLogIdx].reconnected = true;
+          wifiLogs[lastLogIdx].reconnectTime = reconnectDuration;
+        }
+        
+        Serial.println("=== WiFi RECONNECTED ===");
+        Serial.print("Time: ");
+        Serial.println(getFormattedTime());
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("RSSI: ");
+        Serial.println(WiFi.RSSI());
+        Serial.print("Reconnection took: ");
+        Serial.print(reconnectDuration);
+        Serial.println(" seconds");
+        Serial.println("========================");
+        
+        wifiReconnectAttempts = 0;
+        wifiConnectedTime = millis();
+        wifiWasConnected  = true;
+
+        if (!client.connected()) {
+          reconnect();
+        }
+      } else if (now - lastWiFiReconnectAttempt >= WIFI_RECONNECT_INTERVAL) {
+        // Time to attempt reconnection
         lastWiFiReconnectAttempt = now;
         wifiReconnectAttempts++;
 
@@ -235,50 +259,13 @@ void checkWiFiConnection() {
         WiFi.setTxPower(WIFI_POWER_19_5dBm);
         WiFi.begin(ssid, password);
 
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-          delay(500);
-          attempts++;
-          Serial.print(".");
-        }
-        Serial.println();
-
-        if (WiFi.status() == WL_CONNECTED) {
-          unsigned long reconnectDuration = (millis() - wifiLastDisconnectTime) / 1000;  // seconds
-          
-          // Update the most recent log entry with reconnection info
-          int lastLogIdx = (wifiLogIndex - 1 + MAX_WIFI_LOGS) % MAX_WIFI_LOGS;
-          if (wifiLogCount > 0) {
-            wifiLogs[lastLogIdx].reconnected = true;
-            wifiLogs[lastLogIdx].reconnectTime = reconnectDuration;
-          }
-          
-          Serial.println("=== WiFi RECONNECTED ===");
-          Serial.print("Time: ");
-          Serial.println(getFormattedTime());
-          Serial.print("IP: ");
-          Serial.println(WiFi.localIP());
-          Serial.print("RSSI: ");
-          Serial.println(WiFi.RSSI());
-          Serial.print("Reconnection took: ");
-          Serial.print(reconnectDuration);
-          Serial.println(" seconds");
-          Serial.println("========================");
-          
+        // Non-blocking reconnection attempt - check status without blocking delays
+        // The reconnection will be checked on the next WiFi check interval
+        Serial.println("WiFi reconnection initiated (non-blocking)");
+        
+        if (wifiReconnectAttempts >= MAX_WIFI_RECONNECT_ATTEMPTS) {
+          Serial.println("Max reconnect attempts reached. Will try again later.");
           wifiReconnectAttempts = 0;
-
-          wifiConnectedTime = millis();
-          wifiWasConnected  = true;
-
-          if (!client.connected()) {
-            reconnect();
-          }
-        } else {
-          Serial.println("WiFi reconnect failed.");
-          if (wifiReconnectAttempts >= MAX_WIFI_RECONNECT_ATTEMPTS) {
-            Serial.println("Max reconnect attempts reached. Will try again later.");
-            wifiReconnectAttempts = 0;
-          }
         }
       }
     } else {
@@ -416,52 +403,11 @@ String getWiFiUptime() {
   }
 }
 
-// Buzzer
-void buzzerOn() {
-  if (!buzzerPWMAttached) {
-    uint32_t channel = ledcAttach(BUZZER_PIN, BUZZER_FREQUENCY, 8);
-    if (channel != 0) {
-      buzzerPWMAttached = true;
-    }
-  }
-  if (buzzerPWMAttached) {
-    ledcWrite(BUZZER_PIN, BUZZER_DUTY);
-  } else {
-    digitalWrite(BUZZER_PIN, HIGH);
-  }
-  buzzerActive = true;
-}
-
-void buzzerOff() {
-  if (buzzerPWMAttached) {
-    ledcWrite(BUZZER_PIN, 0);
-  } else {
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-  buzzerActive = false;
-}
-
-void buzzerBeep(int duration = 300) {
-  buzzerOn();
-  buzzerBeepStart = millis();
-}
-
-void updateBuzzer() {
-  if (buzzerActive) {
-    if (millis() - buzzerBeepStart >= BUZZER_BEEP_DURATION) {
-      buzzerOff();
-    }
-  }
-}
-
 void checkAlerts() {
-  bool anyAlert = false;
-
   // External (old fridge sensor, but using FRIDGE thresholds)
   if (externalOk) {
     if (tExternal > FRIDGE_MAX_TEMP || tExternal < FRIDGE_MIN_TEMP) {
       externalAlert = true;
-      anyAlert = true;
     } else {
       externalAlert = false;
     }
@@ -473,7 +419,6 @@ void checkAlerts() {
   if (freezerOk) {
     if (tFreezer > FREEZER_MAX_TEMP || tFreezer < FREEZER_MIN_TEMP) {
       freezerAlert = true;
-      anyAlert = true;
     } else {
       freezerAlert = false;
     }
@@ -485,7 +430,6 @@ void checkAlerts() {
   if (fridgeOk) {
     if (tFridge > EXTERNAL_MAX_TEMP || tFridge < EXTERNAL_MIN_TEMP) {
       fridgeAlert = true;
-      anyAlert = true;
     } else {
       fridgeAlert = false;
     }
@@ -494,17 +438,6 @@ void checkAlerts() {
   }
 
   sensorFailureAlert = !fridgeOk || !freezerOk || !externalOk;
-
-  unsigned long now = millis();
-  if (anyAlert) {
-    if (now - lastBuzzerBeep >= BUZZER_INTERVAL && !buzzerActive) {
-      buzzerBeep(BUZZER_BEEP_DURATION);
-      lastBuzzerBeep = now;
-    }
-  } else {
-    buzzerOff();
-    lastBuzzerBeep = 0;
-  }
 }
 
 void scanSensors() {
@@ -594,19 +527,6 @@ void setup() {
   ArduinoOTA.begin();
 
   client.setServer(mqtt_server, 1883);
-  sensors.begin();
-
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
-
-  Serial.println("Testing buzzer...");
-  for (int i = 0; i < 3; i++) {
-    buzzerOn();
-    delay(150);
-    buzzerOff();
-    delay(100);
-  }
-  Serial.println("Buzzer test complete.");
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!MDNS.begin("fridge-freezer")) {
@@ -614,18 +534,7 @@ void setup() {
     }
   }
 
-  delay(1000);
-  sensors.requestTemperatures();
-  tExternal = sensors.getTempC(fridgeSensor);   // External display shows old fridge sensor
-  tFreezer  = sensors.getTempC(freezerSensor);
-  tFridge   = sensors.getTempC(externalSensor); // Fridge display shows old external sensor
-
-  externalOk = (tExternal != DEVICE_DISCONNECTED_C && tExternal > -100);
-  freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
-  fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
-
-  scanSensors();
-
+  // Initialize readings array
   for (int i = 0; i < MAX_READINGS; i++) {
     readings[i].timestamp = 0;
     readings[i].tExternal = -127;
@@ -633,14 +542,8 @@ void setup() {
     readings[i].tFridge   = -127;
   }
 
-  unsigned long nowEpoch = currentEpoch();
-  readings[readingIndex].timestamp = nowEpoch;
-  readings[readingIndex].tExternal = externalOk ? tExternal : -127;
-  readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
-  readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
-
-  readingIndex  = (readingIndex + 1) % MAX_READINGS;
-  readingCount  = 1;
+  readingIndex  = 0;
+  readingCount  = 0;
   lastGraphSave = millis();
 
   // /data – last 24h, client filters 3h/12h/24h
@@ -817,19 +720,19 @@ void setup() {
     page += "<p class='subtitle'>Real-time Temperature Monitoring</p>";
     page += "<div class='sensor-grid'>";
 
-    // External card (labelled Fridge)
+    // Fridge card (shows fridge sensor data)
     page += "<div class='sensor-card'>";
-    page += "<div class='sensor-title'><span id='statusExternalIndicator' class='status-indicator ";
-    page += externalOk ? "status-ok" : "status-error";
+    page += "<div class='sensor-title'><span id='statusFridgeIndicator' class='status-indicator ";
+    page += fridgeOk ? "status-ok" : "status-error";
     page += "'></span>Fridge</div>";
-    if (externalOk) {
-      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>";
-      page += String(tExternal, 1);
+    if (fridgeOk) {
+      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>";
+      page += String(tFridge, 1);
       page += "</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusExternalText' class='status-text status-text-ok'>Sensor Active</div>";
+      page += "<div id='statusFridgeText' class='status-text status-text-ok'>Sensor Active</div>";
     } else {
-      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>—</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusExternalText' class='status-text status-text-error'>Sensor Not Detected</div>";
+      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>—</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusFridgeText' class='status-text status-text-error'>Sensor Not Detected</div>";
     }
     page += "</div>";
 
@@ -849,19 +752,19 @@ void setup() {
     }
     page += "</div>";
 
-    // Fridge card (labelled External)
+    // External card (shows external sensor data)
     page += "<div class='sensor-card'>";
-    page += "<div class='sensor-title'><span id='statusFridgeIndicator' class='status-indicator ";
-    page += fridgeOk ? "status-ok" : "status-error";
+    page += "<div class='sensor-title'><span id='statusExternalIndicator' class='status-indicator ";
+    page += externalOk ? "status-ok" : "status-error";
     page += "'></span>External</div>";
-    if (fridgeOk) {
-      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>";
-      page += String(tFridge, 1);
+    if (externalOk) {
+      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>";
+      page += String(tExternal, 1);
       page += "</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusFridgeText' class='status-text status-text-ok'>Sensor Active</div>";
+      page += "<div id='statusExternalText' class='status-text status-text-ok'>Sensor Active</div>";
     } else {
-      page += "<div class='temperature'><span id='tempFridge' class='fade-value'>—</span><span class='unit'>°C</span></div>";
-      page += "<div id='statusFridgeText' class='status-text status-text-error'>Sensor Not Detected</div>";
+      page += "<div class='temperature'><span id='tempExternal' class='fade-value'>—</span><span class='unit'>°C</span></div>";
+      page += "<div id='statusExternalText' class='status-text status-text-error'>Sensor Not Detected</div>";
     }
     page += "</div>";
 
@@ -973,9 +876,37 @@ void setup() {
     server.send(200, "text/html", page);
   });
 
+  // Start web server early so webpage is accessible even if sensors fail
   if (WiFi.status() == WL_CONNECTED) {
     server.begin();
+    Serial.println("Web server started! Access at http://" + WiFi.localIP().toString());
   }
+
+  // Now initialize sensors (after web server is running)
+  sensors.begin();
+  
+  // Try to read sensors, but don't block if they're not connected
+  delay(500);
+  sensors.requestTemperatures();
+  tExternal = sensors.getTempC(externalSensor);  // External sensor (28:7D:B0:B0:0F:00:00:4D)
+  tFreezer  = sensors.getTempC(freezerSensor);   // Freezer sensor (28:89:89:87:00:3C:05:5A)
+  tFridge   = sensors.getTempC(fridgeSensor);    // Fridge sensor (28:4F:2E:AF:0F:00:00:79)
+
+  externalOk = (tExternal != DEVICE_DISCONNECTED_C && tExternal > -100);
+  freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
+  fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
+
+  scanSensors();
+
+  // Store initial reading
+  unsigned long nowEpoch = currentEpoch();
+  readings[readingIndex].timestamp = nowEpoch;
+  readings[readingIndex].tExternal = externalOk ? tExternal : -127;
+  readings[readingIndex].tFreezer  = freezerOk  ? tFreezer  : -127;
+  readings[readingIndex].tFridge   = fridgeOk   ? tFridge   : -127;
+
+  readingIndex  = (readingIndex + 1) % MAX_READINGS;
+  readingCount  = 1;
 
   if (client.connected()) {
     client.publish(topic_availability, "online", true);
@@ -993,22 +924,20 @@ void loop() {
   if (!client.connected()) reconnect();
   client.loop();
 
-  updateBuzzer();
-
   unsigned long now = millis();
   if (now - lastRead >= interval) {
     lastRead = now;
 
     sensors.requestTemperatures();
-    tExternal = sensors.getTempC(fridgeSensor);   // old external now "Fridge"
-    tFreezer  = sensors.getTempC(freezerSensor);
-    tFridge   = sensors.getTempC(externalSensor); // old fridge now "External"
+    tExternal = sensors.getTempC(externalSensor);  // External sensor (28:7D:B0:B0:0F:00:00:4D)
+    tFreezer  = sensors.getTempC(freezerSensor);   // Freezer sensor (28:89:89:87:00:3C:05:5A)
+    tFridge   = sensors.getTempC(fridgeSensor);    // Fridge sensor (28:4F:2E:AF:0F:00:00:79)
 
     externalOk = (tExternal != DEVICE_DISCONNECTED_C && tExternal > -100);
     freezerOk  = (tFreezer  != DEVICE_DISCONNECTED_C && tFreezer  > -100);
     fridgeOk   = (tFridge   != DEVICE_DISCONNECTED_C && tFridge   > -100);
 
-    checkAlerts();
+    checkAlerts();  // Update alert states
     scanSensors();
 
     // Publish mapped temps
