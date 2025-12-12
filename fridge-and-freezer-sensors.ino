@@ -10,7 +10,7 @@
 // Sketch version information
 const char* SKETCH_NAME    = "fridge-and-freezer-sensors";
 const char* SKETCH_FOLDER  = "/Users/ian/Documents/Arduino/fridge-and-freezer-sensors";
-const char* SKETCH_VERSION = "1.0.9";  // Swapped Fridge/External display labels
+const char* SKETCH_VERSION = "1.0.10";  // Fixed MQTT topic publishing
 
 // Serial output verbosity
 const bool SERIAL_VERBOSE = false;
@@ -941,9 +941,9 @@ void loop() {
     scanSensors();
 
     // Publish mapped temps
-    if (externalOk) client.publish(topic_fridge, String(tExternal).c_str(), true);
+    if (externalOk) client.publish(topic_external, String(tExternal).c_str(), true);
     if (freezerOk)  client.publish(topic_freezer, String(tFreezer).c_str(), true);
-    if (fridgeOk)   client.publish(topic_external, String(tFridge).c_str(), true);
+    if (fridgeOk)   client.publish(topic_fridge, String(tFridge).c_str(), true);
 
     if (now - lastGraphSave >= GRAPH_INTERVAL) {
       lastGraphSave = now;
